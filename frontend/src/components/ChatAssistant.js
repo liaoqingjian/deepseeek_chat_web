@@ -3,6 +3,7 @@ import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { tomorrow } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import remarkGfm from 'remark-gfm';  // 导入remarkGfm插件
 
 const API_URL = 'http://localhost:8000';
 
@@ -15,6 +16,8 @@ const ChatAssistant = () => {
   const [models, setModels] = useState({});
   const [selectedModel, setSelectedModel] = useState('deepseek-chat');
   const [isStreamMode, setIsStreamMode] = useState(true); // 默认使用流式输出
+  const [enableHistory, setEnableHistory] = useState(true); // 默认开启历史记录
+  const [historyLength, setHistoryLength] = useState(5); // 默认保留5条历史记录
 
   const messagesEndRef = useRef(null);
   const eventSourceRef = useRef(null);
@@ -55,6 +58,21 @@ const ChatAssistant = () => {
     }
   };
 
+  // 准备历史消息，按照后端API要求的格式
+  const prepareHistoryMessages = () => {
+    if (!enableHistory) return [];
+    
+    // 按照最新的顺序筛选出最近的消息
+    const recentMessages = [...messages].filter(msg => msg.id !== 'temp') // 排除临时消息
+                                        .slice(-historyLength * 2); // 获取最近的n条对话（包括用户和助手的消息）
+    
+    // 转换为后端API要求的格式
+    return recentMessages.map(msg => ({
+      role: msg.sender === 'user' ? 'user' : 'assistant',
+      content: msg.text
+    }));
+  };
+
   const handleStreamResponse = async (userMessage) => {
     try {
       // 先添加用户消息
@@ -71,6 +89,9 @@ const ChatAssistant = () => {
           loading: true
         }
       ]);
+
+      // 获取历史消息
+      const historyMessages = prepareHistoryMessages();
 
       // 取消之前的请求
       if (abortControllerRef.current) {
@@ -92,7 +113,8 @@ const ChatAssistant = () => {
         },
         body: JSON.stringify({
           message: userMessage.text,
-          model: selectedModel
+          model: selectedModel,
+          history: historyMessages // 添加历史消息
         }),
         signal: abortControllerRef.current.signal
       });
@@ -213,10 +235,14 @@ const ChatAssistant = () => {
     setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
 
+    // 获取历史消息
+    const historyMessages = prepareHistoryMessages();
+
     try {
       const response = await axios.post(`${API_URL}/chat`, {
         message: userMessage.text,
-        model: selectedModel
+        model: selectedModel,
+        history: historyMessages // 添加历史消息
       });
 
       const assistantMessage = {
@@ -271,12 +297,31 @@ const ChatAssistant = () => {
     setIsStreamMode(!isStreamMode);
   };
 
+  const toggleHistoryMode = () => {
+    setEnableHistory(!enableHistory);
+  };
+
+  const handleHistoryLengthChange = (e) => {
+    const value = parseInt(e.target.value);
+    if (!isNaN(value) && value > 0) {
+      setHistoryLength(value);
+    }
+  };
+
+  const clearHistory = () => {
+    // 只保留初始问候语
+    setMessages([
+      { id: 1, text: '你好！我是你的时间管理助手。我可以帮你管理任务、安排时间、提供时间管理建议。有什么我可以帮你的吗？', sender: 'assistant' }
+    ]);
+  };
+
   // 渲染消息内容，对助手消息使用Markdown渲染
   const renderMessageContent = (message) => {
     if (message.sender === 'assistant') {
       return (
         <div className="markdown-content">
           <ReactMarkdown
+            remarkPlugins={[remarkGfm]}  // 添加remarkGfm插件支持表格等GFM语法
             components={{
               // 为各种元素添加样式
               h1: ({node, ...props}) => <h1 className="text-xl font-bold my-2" {...props} />,
@@ -352,6 +397,41 @@ const ChatAssistant = () => {
               disabled={isLoading}
             />
           </div>
+        </div>
+        <div className="flex justify-between items-center mt-2">
+          <div className="flex items-center">
+            <label htmlFor="history-mode" className="mr-2">历史记忆: </label>
+            <input
+              type="checkbox"
+              id="history-mode"
+              checked={enableHistory}
+              onChange={toggleHistoryMode}
+              disabled={isLoading}
+              className="mr-4"
+            />
+            {enableHistory && (
+              <>
+                <label htmlFor="history-length" className="mr-2">记忆长度: </label>
+                <input
+                  type="number"
+                  id="history-length"
+                  min="1"
+                  max="10"
+                  value={historyLength}
+                  onChange={handleHistoryLengthChange}
+                  disabled={isLoading}
+                  className="w-16 mr-4 px-2 py-1 border rounded"
+                />
+              </>
+            )}
+          </div>
+          <button
+            onClick={clearHistory}
+            disabled={isLoading || messages.length <= 1}
+            className="clear-button"
+          >
+            清空对话
+          </button>
         </div>
       </div>
 

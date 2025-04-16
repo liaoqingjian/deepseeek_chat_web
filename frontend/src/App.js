@@ -94,7 +94,7 @@ function App() {
       </header>
 
       <main>
-        {activeTab === 'tasks' ? (
+        <div style={{ display: activeTab === 'tasks' ? 'block' : 'none' }}>
           <div className="tasks-container">
             <form className="task-form" onSubmit={handleAddTask}>
               <input 
@@ -128,9 +128,10 @@ function App() {
               onTaskDelete={handleTaskDelete}
             />
           </div>
-        ) : (
+        </div>
+        <div style={{ display: activeTab === 'chat' ? 'block' : 'none' }}>
           <ChatAssistant />
-        )}
+        </div>
       </main>
     </div>
   );

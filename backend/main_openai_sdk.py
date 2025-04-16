@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends, Body, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict
 import os
 from datetime import datetime
 import json
@@ -42,9 +42,14 @@ class Task(BaseModel):
     due_date: Optional[str] = None
     completed: bool = False
 
-class ChatMessage(BaseModel):
+class Message(BaseModel):
+    role: str  # "user" 或 "assistant"
+    content: str
+
+class ChatRequest(BaseModel):
     message: str
-    model: Optional[str] = "deepseek-chat"  # 默认使用DeepSeek-V3模型
+    model: Optional[str] = "deepseek-chat"
+    history: Optional[List[Message]] = []  # 新增历史消息列表
 
 # 简单的数据存储
 tasks = []
@@ -89,7 +94,7 @@ def delete_task(task_id: int):
             return {"message": "任务已删除"}
     raise HTTPException(status_code=404, detail="任务未找到")
 
-def get_completion_stream(message: str, model: str = "deepseek-chat"):
+def get_completion_stream(message: str, model: str = "deepseek-chat", history: List[Message] = None):
     """生成DeepSeek流式响应的生成器函数"""
     try:
         # 验证模型是否存在
@@ -97,17 +102,26 @@ def get_completion_stream(message: str, model: str = "deepseek-chat"):
             yield f"data: {{\"error\": \"无效的模型: {model}, 可用模型: {list(DEEPSEEK_MODELS.keys())}\" }}\n\n"
             return
 
+        # 构建消息列表
+        messages = [{"role": "system", "content": "你是一个时间管理专家助手，请帮助用户管理时间和任务。"}]
+        
+        # 添加历史消息
+        if history:
+            for msg in history:
+                messages.append({"role": msg.role, "content": msg.content})
+        
+        # 添加当前消息
+        messages.append({"role": "user", "content": message})
+        
         # 使用OpenAI SDK调用DeepSeek API获取流式响应
         print(f"发送消息到DeepSeek（流式）: {message}")
         print(f"使用模型: {model}")
+        print(f"历史消息数量: {len(history) if history else 0}")
         
         # 创建流式响应
         response_stream = client.chat.completions.create(
             model=model,
-            messages=[
-                {"role": "system", "content": "你是一个时间管理专家助手，请帮助用户管理时间和任务。"},
-                {"role": "user", "content": message}
-            ],
+            messages=messages,
             temperature=0.7,
             max_tokens=2000,
             stream=True  # 启用流式输出
@@ -132,43 +146,52 @@ def get_completion_stream(message: str, model: str = "deepseek-chat"):
         yield f"data: {{\"error\": \"{error_message}\" }}\n\n"
 
 @app.post("/chat")
-def chat_with_deepseek(chat_message: ChatMessage):
+def chat_with_deepseek(chat_request: ChatRequest):
     try:
         # 验证模型是否存在
-        if chat_message.model not in DEEPSEEK_MODELS:
-            raise HTTPException(status_code=400, detail=f"无效的模型: {chat_message.model}, 可用模型: {list(DEEPSEEK_MODELS.keys())}")
+        if chat_request.model not in DEEPSEEK_MODELS:
+            raise HTTPException(status_code=400, detail=f"无效的模型: {chat_request.model}, 可用模型: {list(DEEPSEEK_MODELS.keys())}")
+            
+        # 构建消息列表
+        messages = [{"role": "system", "content": "你是一个时间管理专家助手，请帮助用户管理时间和任务。"}]
+        
+        # 添加历史消息
+        if chat_request.history:
+            for msg in chat_request.history:
+                messages.append({"role": msg.role, "content": msg.content})
+        
+        # 添加当前消息
+        messages.append({"role": "user", "content": chat_request.message})
             
         # 使用OpenAI SDK调用DeepSeek API - 按照官方示例更新
-        print(f"发送消息到DeepSeek: {chat_message.message}")
-        print(f"使用模型: {chat_message.model}")
+        print(f"发送消息到DeepSeek: {chat_request.message}")
+        print(f"使用模型: {chat_request.model}")
+        print(f"历史消息数量: {len(chat_request.history) if chat_request.history else 0}")
         
         # 使用官方文档中的格式
         response = client.chat.completions.create(
-            model=chat_message.model,  # 使用用户选择的模型
-            messages=[
-                {"role": "system", "content": "你是一个时间管理专家助手，请帮助用户管理时间和任务。"},
-                {"role": "user", "content": chat_message.message}
-            ],
+            model=chat_request.model,  # 使用用户选择的模型
+            messages=messages,
             temperature=0.7,
             max_tokens=2000,
-            stream=True
+            stream=False
         )
         
         # 打印完整响应以便调试
         print(f"DeepSeek响应: {response}")
         
         # 返回生成的消息内容
-        return {"response": response.choices[0].message.content, "model": chat_message.model}
+        return {"response": response.choices[0].message.content, "model": chat_request.model}
         
     except Exception as e:
         print(f"调用DeepSeek API错误: {str(e)}")
         raise HTTPException(status_code=500, detail=f"与DeepSeek通信错误: {str(e)}")
 
 @app.post("/chat_stream")
-async def chat_stream_post(chat_message: ChatMessage):
+async def chat_stream_post(chat_request: ChatRequest):
     """流式聊天接口 - POST方法"""
     return StreamingResponse(
-        get_completion_stream(chat_message.message, chat_message.model),
+        get_completion_stream(chat_request.message, chat_request.model, chat_request.history),
         media_type="text/event-stream"
     )
 
